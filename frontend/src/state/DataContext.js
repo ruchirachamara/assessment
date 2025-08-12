@@ -27,7 +27,7 @@ export function DataProvider({ children }) {
 
   const checkForSearch = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/items/search`);
+      const response = await fetch(`${API_BASE_URL}/api/items`);
       return response.ok;
     } catch {
       return false;
@@ -79,8 +79,6 @@ export function DataProvider({ children }) {
   }, []);
 
   const fetchItems = useCallback(async (searchParams = {}) => {
-    let url;
-    let processResponse;
     // Cancel any existing request
     if (activeRequestRef.current) {
       activeRequestRef.current.cancelled = true;
@@ -93,67 +91,53 @@ export function DataProvider({ children }) {
     try {
       setLoading(true);
       setError(null);    
-      // Check if we should use enhanced backend features
+      
+      // Check if we have an enhanced backend
       const hasEnhancedBackend = await checkForSearch();
             
       if (hasEnhancedBackend) {
-        const queryString = buildQueryString(searchParams);
-        url = `${API_BASE_URL}/api/items${queryString ? `?${queryString}` : ''}`;
-        
-        processResponse = (response) => {
-          setItems(response.items || []);
-          setAllItems(response.items || []);
-          setPagination(response.pagination || null);
-          setSearchMetadata(response.search || null);
-        };
-      } else {
-        // Use legacy backend with client-side processing
-        const { q, category, limit = 12, page = 1 } = searchParams;
-        const legacyParams = {};
-        
-        if (q) legacyParams.q = q;
-        legacyParams.limit = 1000;        
-        const queryString = buildQueryString(legacyParams);
-        url = `${API_BASE_URL}/api/items${queryString ? `?${queryString}` : ''}`;
-        
-        processResponse = (response) => {
-          let rawItems = Array.isArray(response) ? response : [];          
-          setAllItems(rawItems);
-          const filteredItems = processItemsClientSide(rawItems, searchParams);          
-          const itemsPerPage = parseInt(limit) || 12;
-          const currentPage = parseInt(page) || 1;
-          const startIndex = (currentPage - 1) * itemsPerPage;
-          const endIndex = startIndex + itemsPerPage;
-          const paginatedItems = filteredItems.slice(startIndex, endIndex);          
-          setItems(paginatedItems);          
-          // Create pagination metadata
-          const totalItems = filteredItems.length;
-          const totalPages = Math.ceil(totalItems / itemsPerPage);          
-          const paginationData = {
-            currentPage,
-            totalPages,
-            totalItems,
-            itemsPerPage,
-            hasNextPage: currentPage < totalPages,
-            hasPrevPage: currentPage > 1,
-            nextPage: currentPage < totalPages ? currentPage + 1 : null,
-            prevPage: currentPage > 1 ? currentPage - 1 : null
-          };
+        // Try enhanced backend first
+        try {
+          const queryString = buildQueryString(searchParams);
+          const url = `${API_BASE_URL}/api/items${queryString ? `?${queryString}` : ''}`;
           
-          setPagination(paginationData);          
-          setSearchMetadata({
-            query: q || null,
-            category: category || null,
-            sortBy: searchParams.sortBy || 'id',
-            sortOrder: searchParams.sortOrder || 'asc',
-            resultsFound: filteredItems.length
-          });
-        };
+          const res = await fetch(url);
+          
+          if (requestTracker.cancelled) {
+            return;
+          }
+          
+          if (!res.ok) {
+            throw new Error(`HTTP error! status: ${res.status}`);
+          }
+          
+          const response = await res.json();
+          
+          if (!requestTracker.cancelled) {
+            // Check if response has enhanced structure
+            if (response.items && response.pagination) {
+              setItems(response.items || []);
+              setAllItems(response.items || []);
+              setPagination(response.pagination || null);
+              setSearchMetadata(response.search || null);
+            } else {
+              // Fallback to simple array response
+              throw new Error('Enhanced backend not available');
+            }
+          }
+          
+          return response;
+        } catch (enhancedError) {
+          // If enhanced backend fails, fall back to simple processing
+          console.log('Enhanced backend failed, falling back to simple mode:', enhancedError.message);
+        }
       }
       
+      // Fallback: Use simple backend with client-side processing
+      const { q, category, limit = 12, page = 1 } = searchParams;
+      const url = `${API_BASE_URL}/api/items`;
       const res = await fetch(url);
       
-      // Check if request was cancelled before processing response
       if (requestTracker.cancelled) {
         return;
       }
@@ -164,9 +148,47 @@ export function DataProvider({ children }) {
       
       const response = await res.json();
       
-      // Final check before state update
       if (!requestTracker.cancelled) {
-        processResponse(response);
+        let rawItems = Array.isArray(response) ? response : 
+                      response.items ? response.items : 
+                      response.data ? response.data : [];
+        
+        setAllItems(rawItems);
+        
+        // Process items client-side
+        const filteredItems = processItemsClientSide(rawItems, searchParams);        
+        const itemsPerPage = parseInt(limit) || 12;
+        const currentPage = parseInt(page) || 1;
+        const startIndex = (currentPage - 1) * itemsPerPage;
+        const endIndex = startIndex + itemsPerPage;
+        const paginatedItems = filteredItems.slice(startIndex, endIndex);
+        
+        setItems(paginatedItems);
+        
+        // Create pagination metadata
+        const totalItems = filteredItems.length;
+        const totalPages = Math.ceil(totalItems / itemsPerPage);
+        
+        const paginationData = {
+          currentPage,
+          totalPages,
+          totalItems,
+          itemsPerPage,
+          hasNextPage: currentPage < totalPages,
+          hasPrevPage: currentPage > 1,
+          nextPage: currentPage < totalPages ? currentPage + 1 : null,
+          prevPage: currentPage > 1 ? currentPage - 1 : null
+        };
+        
+        setPagination(paginationData);
+        
+        setSearchMetadata({
+          query: q || null,
+          category: category || null,
+          sortBy: searchParams.sortBy || 'id',
+          sortOrder: searchParams.sortOrder || 'asc',
+          resultsFound: filteredItems.length
+        });
       }
       
       return response;
@@ -182,52 +204,25 @@ export function DataProvider({ children }) {
         setLoading(false);
       }
     }
-  }, [buildQueryString, checkForSearch, processItemsClientSide]);
-
-  const fetchSearchSuggestions = useCallback(async (query) => {
-    try {
-      if (!query || query.trim().length < 2) {
-        return { suggestions: [] };
-      }
-      
-      const url = `${API_BASE_URL}/api/items/search/suggestions?q=${encodeURIComponent(query)}`;
-      const res = await fetch(url);
-      
-      if (res.ok) {
-        return await res.json();
-      } else {
-        // Fallback: generate suggestions from all items
-        const searchTerm = query.toLowerCase();
-        const suggestions = new Set();
-        
-        allItems.forEach(item => {
-          if (item.name && item.name.toLowerCase().includes(searchTerm)) {
-            suggestions.add(item.name);
-          }
-          if (item.category && item.category.toLowerCase().includes(searchTerm)) {
-            suggestions.add(item.category);
-          }
-        });
-        
-        return { 
-          suggestions: Array.from(suggestions).slice(0, 10),
-          query 
-        };
-      }
-    } catch (err) {
-      return { suggestions: [] };
-    }
-  }, [allItems]);
+  }, [buildQueryString, checkForSearch, processItemsClientSide]);  
 
   const fetchCategories = useCallback(async () => {
     try {
       let itemsToProcess = allItems;
       
       if (itemsToProcess.length === 0) {
-        const itemsRes = await fetch(`${API_BASE_URL}/api/items?limit=1000`);
-        if (itemsRes.ok) {
-          itemsToProcess = await itemsRes.json();
-          setAllItems(itemsToProcess);
+        try {
+          const itemsRes = await fetch(`${API_BASE_URL}/api/items`);
+          if (itemsRes.ok) {
+            const response = await itemsRes.json();
+            itemsToProcess = Array.isArray(response) ? response : 
+                            response.items ? response.items : 
+                            response.data ? response.data : [];
+            setAllItems(itemsToProcess);
+          }
+        } catch (error) {
+          console.log('Could not fetch items for categories:', error.message);
+          return { categories: [] };
         }
       }
       
@@ -241,6 +236,7 @@ export function DataProvider({ children }) {
       return { categories: extractedCategories };
     } catch (err) {
       setCategories([]);
+      return { categories: [] };
     }
   }, [allItems]);
 
@@ -274,7 +270,6 @@ export function DataProvider({ children }) {
     error,
     fetchItems,
     fetchItemsSimple,
-    fetchSearchSuggestions,
     fetchCategories,
     resetItems,
     cleanup

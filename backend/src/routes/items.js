@@ -19,15 +19,6 @@ async function readData() {
   }
 }
 
-// Utility to write data asynchronously (added: non-blocking write operation)
-async function writeData(data) {
-  try {
-    await fs.writeFile(DATA_PATH, JSON.stringify(data, null, 2), 'utf8');
-  } catch (error) {
-    throw new Error(`Failed to write data: ${error.message}`);
-  }
-}
-
 // Enhanced search function with multiple criteria
 function searchItems(items, query) {
   if (!query || query.trim() === '') {
@@ -135,46 +126,6 @@ router.get('/', async (req, res, next) => {
     };
 
     res.json(response);
-  } catch (err) {
-    next(err);
-  }
-});
-
-/**
- * GET /api/items/search/suggestions - Search suggestions endpoint
- * 
- * Returns search suggestions based on the provided query parameter.
- * Suggestions are generated from item names and categories that match the search term.
- * 
- */
-router.get('/search/suggestions', async (req, res, next) => {
-  try {
-    const { q } = req.query;
-    
-    if (!q || q.trim().length < 2) {
-      return res.json({ suggestions: [] });
-    }
-
-    const data = await readData();
-    const searchTerm = q.toLowerCase().trim();
-    const suggestions = new Set();
-    
-    data.forEach(item => {
-      if (item.name && item.name.toLowerCase().includes(searchTerm)) {
-        suggestions.add(item.name);
-      }
-      
-      if (item.category && item.category.toLowerCase().includes(searchTerm)) {
-        suggestions.add(item.category);
-      }
-    });
-
-    const suggestionArray = Array.from(suggestions).slice(0, 10);
-    
-    res.json({ 
-      suggestions: suggestionArray,
-      query: q 
-    });
   } catch (err) {
     next(err);
   }
